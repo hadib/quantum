@@ -140,6 +140,7 @@ class OVSInterfaceDriver(LinuxInterfaceDriver):
         device = ip.device(device_name)
         device.link.set_address(mac_address)
         if self.conf.network_device_mtu:
+            print "mtu is ssssssssssssssssssssssss %s" % self.conf.network_device_mtu
             device.link.set_mtu(self.conf.network_device_mtu)
 
         if namespace:
