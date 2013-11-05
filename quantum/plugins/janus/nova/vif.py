@@ -27,7 +27,6 @@ from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.libvirt import vif as libvirt_vif
 
-
 LOG = logging.getLogger(__name__)
 
 janus_libvirt_ovs_driver_opt = cfg.StrOpt('libvirt_ovs_janus_api_host',
@@ -49,6 +48,11 @@ def _get_port_no(dev):
                               'ofport', run_as_root=True)
     return int(out.strip())
 
+def _set_port_no_in_external_id(dev, of_port):
+    out, _err = utils.execute('ovs-vsctl', 'set', 'Interface', dev,
+                              'external-ids:ofport=%s' % of_port,run_as_root=True)
+    return
+
 
 class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver):
     def __init__(self, **kwargs):
@@ -61,13 +65,19 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
     def _get_port_no(self, mapping):
         iface_id = mapping['vif_uuid']
         _v1_name, v2_name = self.get_veth_pair_names(iface_id)
-        return _get_port_no(v2_name)
+        return (v2_name, _get_port_no(v2_name))
 
     def plug(self, instance, vif):
         result = super(LibvirtOpenVswitchOFPJanusDriver, self).plug(
             instance, vif)
         network, mapping = vif
-        port_no = self._get_port_no(mapping)
+        (v2_name, port_no) = self._get_port_no(mapping)
+        try:
+            print "dev, %s, %s port %s" %(mapping, v2_name, port_no)
+            _set_port_no_in_external_id(v2_name,port_no)
+        except:
+            traceback.print_exc()
+            pass
         try:
             self.client.createPort(network['id'], self.datapath_id, port_no)
             self.client.addMAC(network['id'], mapping['mac'])
@@ -83,7 +93,7 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
 
     def unplug(self, instance, vif):
         network, mapping = vif
-        port_no = self._get_port_no(mapping)
+        (v2_name, port_no) = self._get_port_no(mapping)
         try:
             self.client.deletePort(network['id'], self.datapath_id, port_no)
             self.client.delMAC(network['id'], mapping['mac'])
