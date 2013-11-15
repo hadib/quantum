@@ -18,20 +18,22 @@ from quantum.openstack.common import cfg
 
 
 database_opts = [
-    cfg.StrOpt('sql_connection', default='sqlite://'),
-    cfg.IntOpt('sql_max_retries', default=-1),
-    cfg.IntOpt('reconnect_interval', default=2),
+    cfg.StrOpt('sql_connection', default = 'sqlite://'),
+    cfg.IntOpt('sql_max_retries', default = -1),
+    cfg.IntOpt('reconnect_interval', default = 2),
 ]
 
 ovs_opts = [
-    cfg.StrOpt('integration_bridge', default='br-int'),
-    cfg.StrOpt('openflow_controller', default='127.0.0.1:6633'),
-    cfg.StrOpt('openflow_rest_api', default='127.0.0.1:8080'),
+    cfg.StrOpt('integration_bridge', default = 'br-int'),
+    cfg.StrOpt('openflow_controller', default = '127.0.0.1:6633'),
+    cfg.StrOpt('openflow_rest_api', default = '127.0.0.1:8080'),
+    cfg.IntOpt('ctrl_rate', default = 500),
+    cfg.IntOpt('ctrl_burst', default = 50),
 ]
 
 agent_opts = [
-    cfg.IntOpt('polling_interval', default=2),
-    cfg.StrOpt('root_helper', default='sudo'),
+    cfg.IntOpt('polling_interval', default = 2),
+    cfg.StrOpt('root_helper', default = 'sudo'),
 ]
 
 

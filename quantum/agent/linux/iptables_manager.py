@@ -43,7 +43,7 @@ class IptablesRule(object):
 
     """
 
-    def __init__(self, chain, rule, wrap=True, top=False):
+    def __init__(self, chain, rule, wrap = True, top = False):
         self.chain = chain
         self.rule = rule
         self.wrap = wrap
@@ -74,7 +74,7 @@ class IptablesTable(object):
         self.chains = set()
         self.unwrapped_chains = set()
 
-    def add_chain(self, name, wrap=True):
+    def add_chain(self, name, wrap = True):
         """Adds a named chain to the table.
 
         The chain name is wrapped to be unique for the component creating
@@ -91,7 +91,7 @@ class IptablesTable(object):
         else:
             self.unwrapped_chains.add(name)
 
-    def remove_chain(self, name, wrap=True):
+    def remove_chain(self, name, wrap = True):
         """Remove named chain.
 
         This removal "cascades". All rule in the chain are removed, as are
@@ -120,7 +120,7 @@ class IptablesTable(object):
 
         self.rules = filter(lambda r: jump_snippet not in r.rule, self.rules)
 
-    def add_rule(self, chain, rule, wrap=True, top=False):
+    def add_rule(self, chain, rule, wrap = True, top = False):
         """Add a rule to the table.
 
         This is just like what you'd feed to iptables, just without
@@ -144,7 +144,7 @@ class IptablesTable(object):
             return '%s-%s' % (binary_name, s[1:])
         return s
 
-    def remove_rule(self, chain, rule, wrap=True, top=False):
+    def remove_rule(self, chain, rule, wrap = True, top = False):
         """Remove a rule from a chain.
 
         Note: The rule must be exactly identical to the one that was added.
@@ -160,7 +160,7 @@ class IptablesTable(object):
                      {'chain': chain, 'rule': rule,
                       'top': top, 'wrap': wrap})
 
-    def empty_chain(self, chain, wrap=True):
+    def empty_chain(self, chain, wrap = True):
         """Remove all rules from a chain."""
         chained_rules = [rule for rule in self.rules
                          if rule.chain == chain and rule.wrap == wrap]
@@ -191,8 +191,8 @@ class IptablesManager(object):
 
     """
 
-    def __init__(self, _execute=None, state_less=False,
-                 root_helper=None, use_ipv6=False, namespace=None):
+    def __init__(self, _execute = None, state_less = False,
+                 root_helper = None, use_ipv6 = False, namespace = None):
         if _execute:
             self.execute = _execute
         else:
@@ -209,15 +209,15 @@ class IptablesManager(object):
         # among the various nova components. It sits at the very top
         # of FORWARD and OUTPUT.
         for tables in [self.ipv4, self.ipv6]:
-            tables['filter'].add_chain('quantum-filter-top', wrap=False)
+            tables['filter'].add_chain('quantum-filter-top', wrap = False)
             tables['filter'].add_rule('FORWARD', '-j quantum-filter-top',
-                                      wrap=False, top=True)
+                                      wrap = False, top = True)
             tables['filter'].add_rule('OUTPUT', '-j quantum-filter-top',
-                                      wrap=False, top=True)
+                                      wrap = False, top = True)
 
             tables['filter'].add_chain('local')
             tables['filter'].add_rule('quantum-filter-top', '-j $local',
-                                      wrap=False)
+                                      wrap = False)
 
         # Wrap the built-in chains
         builtin_chains = {4: {'filter': ['INPUT', 'OUTPUT', 'FORWARD']},
@@ -238,23 +238,23 @@ class IptablesManager(object):
                 for chain in chains:
                     tables[table].add_chain(chain)
                     tables[table].add_rule(chain, '-j $%s' %
-                                          (chain), wrap=False)
+                                          (chain), wrap = False)
 
         if not state_less:
             # Add a quantum-postrouting-bottom chain. It's intended to be
             # shared among the various nova components. We set it as the last
             # chain of POSTROUTING chain.
             self.ipv4['nat'].add_chain('quantum-postrouting-bottom',
-                                       wrap=False)
+                                       wrap = False)
             self.ipv4['nat'].add_rule('POSTROUTING',
                                       '-j quantum-postrouting-bottom',
-                                      wrap=False)
+                                      wrap = False)
 
             # We add a snat chain to the shared quantum-postrouting-bottom
             # chain so that it's applied last.
             self.ipv4['nat'].add_chain('snat')
             self.ipv4['nat'].add_rule('quantum-postrouting-bottom',
-                                      '-j $snat', wrap=False)
+                                      '-j $snat', wrap = False)
 
             # And then we add a float-snat chain and jump to first thing in
             # the snat chain.
@@ -279,7 +279,7 @@ class IptablesManager(object):
                 if self.namespace:
                     args = ['ip', 'netns', 'exec', self.namespace] + args
                 current_table = (self.execute(args,
-                                 root_helper=self.root_helper))
+                                 root_helper = self.root_helper))
                 current_lines = current_table.split('\n')
                 new_filter = self._modify_rules(current_lines,
                                                 tables[table])
@@ -287,11 +287,11 @@ class IptablesManager(object):
                 if self.namespace:
                     args = ['ip', 'netns', 'exec', self.namespace] + args
                 self.execute(args,
-                             process_input='\n'.join(new_filter),
-                             root_helper=self.root_helper)
+                             process_input = '\n'.join(new_filter),
+                             root_helper = self.root_helper)
         LOG.debug(("IPTablesManager.apply completed with success"))
 
-    def _modify_rules(self, current_lines, table, binary=None):
+    def _modify_rules(self, current_lines, table, binary = None):
         unwrapped_chains = table.unwrapped_chains
         chains = table.chains
         rules = table.rules

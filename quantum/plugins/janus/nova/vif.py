@@ -18,6 +18,7 @@
 #    under the License.
 
 import httplib
+import traceback
 
 from janus.network.network import JanusNetworkDriver
 
@@ -31,8 +32,8 @@ from nova.virt.libvirt import vif as libvirt_vif
 LOG = logging.getLogger(__name__)
 
 janus_libvirt_ovs_driver_opt = cfg.StrOpt('libvirt_ovs_janus_api_host',
-                                        default='127.0.0.1:8091',
-                                        help='Janus REST API host:port')
+                                        default = '127.0.0.1:8091',
+                                        help = 'Janus REST API host:port')
 
 FLAGS = flags.FLAGS
 FLAGS.register_opt(janus_libvirt_ovs_driver_opt)
@@ -40,13 +41,13 @@ FLAGS.register_opt(janus_libvirt_ovs_driver_opt)
 
 def _get_datapath_id(bridge_name):
     out, _err = utils.execute('ovs-vsctl', 'get', 'Bridge',
-                              bridge_name, 'datapath_id', run_as_root=True)
+                              bridge_name, 'datapath_id', run_as_root = True)
     return out.strip().strip('"')
 
 
 def _get_port_no(dev):
     out, _err = utils.execute('ovs-vsctl', 'get', 'Interface', dev,
-                              'ofport', run_as_root=True)
+                              'ofport', run_as_root = True)
     return int(out.strip())
 
 
@@ -72,7 +73,7 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
             self.client.createPort(network['id'], self.datapath_id, port_no)
             self.client.addMAC(network['id'], mapping['mac'])
             for ip in mapping['ips']:
-                self.client.ip_mac_mapping(network['id'], self.datapath_id, 
+                self.client.ip_mac_mapping(network['id'], self.datapath_id,
                                            mapping['mac'], ip['ip'],
                                            port_no)
         except httplib.HTTPException as e:
@@ -86,10 +87,17 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
         port_no = self._get_port_no(mapping)
         try:
             self.client.deletePort(network['id'], self.datapath_id, port_no)
-            self.client.delMAC(network['id'], mapping['mac'])
             # To do: Un-mapping of ip to mac?
         except httplib.HTTPException as e:
             res = e.args[0]
             if res.status != httplib.NOT_FOUND:
+                traceback.print_exc()
+                raise
+        try:
+            self.client.delMAC(network['id'], mapping['mac'])
+        except httplib.HTTPException as e:
+            res = e.args[0]
+            if res.status != httplib.NOT_FOUND:
+                traceback.print_exc()
                 raise
         super(LibvirtOpenVswitchOFPJanusDriver, self).unplug(instance, vif)

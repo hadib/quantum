@@ -22,6 +22,7 @@
 import logging
 import sys
 import time
+import copy
 
 import netaddr
 
@@ -35,15 +36,15 @@ from quantum.openstack.common import cfg
 from quantum.openstack.common import importutils
 from quantumclient.v2_0 import client
 
-LOG = logging.getLogger( __name__ )
+LOG = logging.getLogger(__name__)
 NS_PREFIX = 'qrouter-'
 INTERNAL_DEV_PREFIX = 'qr-'
 EXTERNAL_DEV_PREFIX = 'qg-'
 
 
-class RouterInfo( object ):
+class RouterInfo(object):
 
-    def __init__( self, router_id, root_helper, use_namespaces ):
+    def __init__(self, router_id, root_helper, use_namespaces):
         self.router_id = router_id
         self.ex_gw_port = None
         self.internal_ports = []
@@ -51,79 +52,81 @@ class RouterInfo( object ):
         self.root_helper = root_helper
         self.use_namespaces = use_namespaces
 
-        self.iptables_manager = iptables_manager.IptablesManager( 
+        self.iptables_manager = iptables_manager.IptablesManager(
             root_helper = root_helper,
             # FIXME(danwent): use_ipv6=True,
-            namespace = self.ns_name() )
+            namespace = self.ns_name())
 
-    def ns_name( self ):
+    def ns_name(self):
         if self.use_namespaces:
             return NS_PREFIX + self.router_id
 
 
-class L3NATAgent( object ):
+class L3NATAgent(object):
 
     OPTS = [
-        cfg.StrOpt( 'admin_user' ),
-        cfg.StrOpt( 'admin_password' ),
-        cfg.StrOpt( 'admin_tenant_name' ),
-        cfg.StrOpt( 'auth_url' ),
-        cfg.StrOpt( 'auth_strategy', default = 'keystone' ),
-        cfg.StrOpt( 'endpoint_url', default = 'http://localhost:9696' ),
-        cfg.StrOpt( 'auth_region' ),
-        cfg.StrOpt( 'root_helper', default = 'sudo' ),
-        cfg.StrOpt( 'external_network_bridge', default = 'br-ex',
-                   help = "Name of bridge used for external network traffic." ),
-        cfg.StrOpt( 'interface_driver',
-                   help = "The driver used to manage the virtual interface." ),
-        cfg.IntOpt( 'polling_interval',
+        cfg.StrOpt('admin_user'),
+        cfg.StrOpt('admin_password'),
+        cfg.StrOpt('admin_tenant_name'),
+        cfg.StrOpt('auth_url'),
+        cfg.StrOpt('auth_strategy', default = 'keystone'),
+        cfg.StrOpt('endpoint_url', default = 'http://localhost:9696'),
+        cfg.StrOpt('auth_region'),
+        cfg.StrOpt('root_helper', default = 'sudo'),
+        cfg.StrOpt('external_network_bridge', default = 'br-ex',
+                   help = "Name of bridge used for external network traffic."),
+        cfg.StrOpt('interface_driver',
+                   help = "The driver used to manage the virtual interface."),
+        cfg.IntOpt('polling_interval',
                    default = 3,
-                   help = "The time in seconds between state poll requests." ),
-        cfg.StrOpt( 'metadata_ip', default = '',
-                   help = "IP address used by Nova metadata server." ),
-        cfg.IntOpt( 'metadata_port',
+                   help = "The time in seconds between state poll requests."),
+        cfg.StrOpt('metadata_ip', default = '',
+                   help = "IP address used by Nova metadata server."),
+        cfg.IntOpt('metadata_port',
                    default = 8775,
-                   help = "TCP Port used by Nova metadata server." ),
+                   help = "TCP Port used by Nova metadata server."),
         # FIXME(danwent): not currently used
-        cfg.BoolOpt( 'send_arp_for_ha',
+        cfg.BoolOpt('send_arp_for_ha',
                     default = True,
-                    help = "Send gratuitious ARP when router IP is configured" ),
-        cfg.BoolOpt( 'use_namespaces', default = True,
-                    help = "Allow overlapping IP." ),
-        cfg.StrOpt( 'router_id', default = '',
+                    help = "Send gratuitious ARP when router IP is configured"),
+        cfg.BoolOpt('use_namespaces', default = True,
+                    help = "Allow overlapping IP."),
+        cfg.StrOpt('router_id', default = '',
                    help = "If namespaces is disabled, the l3 agent can only"
-                        " confgure a router that has the matching router ID." ),
-        cfg.BoolOpt( 'handle_internal_only_routers',
+                        " confgure a router that has the matching router ID."),
+        cfg.BoolOpt('handle_internal_only_routers',
                     default = True,
-                    help = "Agent should implement routers with no gateway" ),
-        cfg.StrOpt( 'gateway_external_network_id', default = '',
+                    help = "Agent should implement routers with no gateway"),
+        cfg.StrOpt('gateway_external_network_id', default = '',
                    help = "UUID of external network for routers implemented "
-                        "by the agents." ),
+                        "by the agents."),
     ]
 
-    def __init__( self, conf ):
+    def __init__(self, conf):
         self.conf = conf
         self.router_info = {}
 
         if not conf.interface_driver:
-            LOG.error( _( 'You must specify an interface driver' ) )
-            sys.exit( 1 )
+            LOG.error(_('You must specify an interface driver'))
+            sys.exit(1)
         try:
-            self.driver = importutils.import_object( conf.interface_driver,
-                                                    conf )
+            self.driver = importutils.import_object(conf.interface_driver,
+                                                    conf)
         except:
-            LOG.exception( _( "Error importing interface driver '%s'"
-                            % conf.interface_driver ) )
-            sys.exit( 1 )
+            LOG.exception(_("Error importing interface driver '%s'"
+                            % conf.interface_driver))
+            sys.exit(1)
 
         self.polling_interval = conf.polling_interval
 
         self.qclient = None
 
         if self.conf.use_namespaces:
-            self._destroy_router_namespaces( self.conf.router_id )
+            self._destroy_router_namespaces(self.conf.router_id)
 
-    def _destroy_router_namespaces( self, only_router_id = None ):
+    def _destroy_router_namespaces(self, only_router_id = None):
+        # We changed this routine to only flush iptables rules and not delete
+        # the namespace and devices in it
         """Destroy router namespaces on the host to eliminate all stale
         linux devices, iptables rules, and namespaces.
 
@@ -131,40 +134,65 @@ class L3NATAgent( object ):
         for multiple l3 agents on the same host, without stepping on each
         other's toes on init.  This only makes sense if router_id is set.
         """
-        root_ip = ip_lib.IPWrapper( self.conf.root_helper )
-        for ns in root_ip.get_namespaces( self.conf.root_helper ):
-            if ns.startswith( NS_PREFIX ):
-                if only_router_id and not ns.endswith( only_router_id ):
+        root_ip = ip_lib.IPWrapper(self.conf.root_helper)
+        for ns in root_ip.get_namespaces(self.conf.root_helper):
+            if ns.startswith(NS_PREFIX):
+                if only_router_id and not ns.endswith(only_router_id):
                     continue
 
                 try:
-                    self._destroy_router_namespace( ns )
+                    self._remove_iptables_rules(ns)
+#                   self._destroy_router_namespace( ns )
                 except:
-                    LOG.exception( "couldn't delete namespace '%s'" % ns )
+                    LOG.exception("couldn't delete namespace '%s'" % ns)
 
-    def _destroy_router_namespace( self, namespace ):
-        ns_ip = ip_lib.IPWrapper( self.conf.root_helper,
-                                 namespace = namespace )
-        for d in ns_ip.get_devices( exclude_loopback = True ):
-            if d.name.startswith( INTERNAL_DEV_PREFIX ):
+    def _remove_iptables_rules(self, namespace):
+        router_id = namespace.strip(NS_PREFIX)
+        ri = RouterInfo(router_id, self.conf.root_helper,
+                        self.conf.use_namespaces)
+
+        chain_set = copy.deepcopy(ri.iptables_manager.ipv4['filter'].chains)
+        for chain in chain_set:
+            ri.iptables_manager.ipv4['filter'].remove_chain(chain)
+
+        chain_set = copy.deepcopy(ri.iptables_manager.ipv4['filter'].unwrapped_chains)
+        for chain in chain_set:
+            ri.iptables_manager.ipv4['filter'].remove_chain(chain, wrap = False)
+
+        chain_set = copy.deepcopy(ri.iptables_manager.ipv4['nat'].chains)
+        for chain in chain_set:
+            ri.iptables_manager.ipv4['nat'].remove_chain(chain)
+
+        chain_set = copy.deepcopy(ri.iptables_manager.ipv4['nat'].unwrapped_chains)
+        for chain in chain_set:
+            ri.iptables_manager.ipv4['nat'].remove_chain(chain, wrap = False)
+
+        ri.iptables_manager.apply()
+
+
+    def _destroy_router_namespace(self, namespace):
+        ns_ip = ip_lib.IPWrapper(self.conf.root_helper,
+                                 namespace = namespace)
+        for d in ns_ip.get_devices(exclude_loopback = True):
+            if d.name.startswith(INTERNAL_DEV_PREFIX):
                 # device is on default bridge
-                self.driver.unplug( d.name, namespace = namespace,
-                                   prefix = INTERNAL_DEV_PREFIX )
-            elif d.name.startswith( EXTERNAL_DEV_PREFIX ):
-                self.driver.unplug( d.name,
+                self.driver.unplug(d.name, namespace = namespace,
+                                   prefix = INTERNAL_DEV_PREFIX)
+            elif d.name.startswith(EXTERNAL_DEV_PREFIX):
+                self.driver.unplug(d.name,
                                    bridge = self.conf.external_network_bridge,
                                    namespace = namespace,
-                                   prefix = EXTERNAL_DEV_PREFIX )
+                                   prefix = EXTERNAL_DEV_PREFIX)
         # (TODO) Address the failure for the deletion of the namespace
 
-    def _create_router_namespace( self, ri ):
-            ip_wrapper_root = ip_lib.IPWrapper( self.conf.root_helper )
-            ip_wrapper = ip_wrapper_root.ensure_namespace( ri.ns_name() )
-            ip_wrapper.netns.execute( ['sysctl', '-w', 'net.ipv4.ip_forward=1'] )
+    def _create_router_namespace(self, ri):
+            ip_wrapper_root = ip_lib.IPWrapper(self.conf.root_helper)
+            ip_wrapper = ip_wrapper_root.ensure_namespace(ri.ns_name())
+            ip_wrapper.netns.execute(['sysctl', '-w', 'net.ipv4.ip_forward=1'])
 
-    def client_create( self ):
-        LOG.debug( _( 'auth region is %s' % self.conf.auth_region ) )
-        self.qclient = client.Client( 
+    def client_create(self):
+        LOG.debug(_('auth region is %s' % self.conf.auth_region))
+        self.qclient = client.Client(
             username = self.conf.admin_user,
             password = self.conf.admin_password,
             tenant_name = self.conf.admin_tenant_name,
@@ -174,9 +202,9 @@ class L3NATAgent( object ):
             region_name = self.conf.auth_region,
             endpoint_url = self.conf.endpoint_url
         )
-        LOG.debug( _( "Client session established!" ) )
+        LOG.debug(_("Client session established!"))
 
-    def daemon_loop( self ):
+    def daemon_loop(self):
         # TODO(danwent): this simple diff logic does not handle if
         # details of a router port (e.g., IP, mac) are changed behind
         # our back.  Will fix this properly with update notifications.
@@ -188,34 +216,34 @@ class L3NATAgent( object ):
             try:
                 self.do_single_loop()
             except:
-                LOG.exception( "Error running l3_nat daemon_loop" )
+                LOG.exception("Error running l3_nat daemon_loop")
                 self.qclient = None
 
-            time.sleep( self.polling_interval )
+            time.sleep(self.polling_interval)
 
-    def _fetch_external_net_id( self ):
+    def _fetch_external_net_id(self):
         """Find UUID of single external network for this agent"""
         if self.conf.gateway_external_network_id:
             return self.conf.gateway_external_network_id
 
         params = {'router:external': True}
-        ex_nets = self.qclient.list_networks( **params )['networks']
-        if len( ex_nets ) > 1:
-            raise Exception( "must configure 'gateway_external_network_id' if "
-                            "Quantum has more than one external network." )
-        if len( ex_nets ) == 0:
+        ex_nets = self.qclient.list_networks(**params)['networks']
+        if len(ex_nets) > 1:
+            raise Exception("must configure 'gateway_external_network_id' if "
+                            "Quantum has more than one external network.")
+        if len(ex_nets) == 0:
             return None
         return ex_nets[0]['id']
 
-    def do_single_loop( self ):
+    def do_single_loop(self):
 
-        if ( self.conf.external_network_bridge and
-            not ip_lib.device_exists( self.conf.external_network_bridge ) ):
-            LOG.error( "external network bridge '%s' does not exist"
-                      % self.conf.external_network_bridge )
+        if (self.conf.external_network_bridge and
+            not ip_lib.device_exists(self.conf.external_network_bridge)):
+            LOG.error("external network bridge '%s' does not exist"
+                      % self.conf.external_network_bridge)
             return
 
-        prev_router_ids = set( self.router_info )
+        prev_router_ids = set(self.router_info)
         cur_router_ids = set()
 
         target_ex_net_id = self._fetch_external_net_id()
@@ -225,8 +253,8 @@ class L3NATAgent( object ):
             if not r['admin_state_up']:
                 continue
 
-            ex_net_id = ( r['external_gateway_info'] and
-                         r['external_gateway_info'].get( 'network_id' ) )
+            ex_net_id = (r['external_gateway_info'] and
+                         r['external_gateway_info'].get('network_id'))
             if not ex_net_id and not self.conf.handle_internal_only_routers:
                 continue
 
@@ -235,66 +263,66 @@ class L3NATAgent( object ):
 
             # If namespaces are disabled, only process the router associated
             # with the configured agent id.
-            if ( self.conf.use_namespaces or
-                r['id'] == self.conf.router_id ):
-                cur_router_ids.add( r['id'] )
+            if (self.conf.use_namespaces or
+                r['id'] == self.conf.router_id):
+                cur_router_ids.add(r['id'])
             else:
                 continue
             if r['id'] not in self.router_info:
-                self._router_added( r['id'] )
+                self._router_added(r['id'])
 
             ri = self.router_info[r['id']]
-            self.process_router( ri )
+            self.process_router(ri)
 
         # identify and remove routers that no longer exist
         for router_id in prev_router_ids - cur_router_ids:
-            self._router_removed( router_id )
+            self._router_removed(router_id)
         prev_router_ids = cur_router_ids
 
-    def _router_added( self, router_id ):
-        ri = RouterInfo( router_id, self.conf.root_helper,
-                        self.conf.use_namespaces )
+    def _router_added(self, router_id):
+        ri = RouterInfo(router_id, self.conf.root_helper,
+                        self.conf.use_namespaces)
         self.router_info[router_id] = ri
         if self.conf.use_namespaces:
-            self._create_router_namespace( ri )
+            self._create_router_namespace(ri)
         for c, r in self.metadata_filter_rules():
-            ri.iptables_manager.ipv4['filter'].add_rule( c, r )
+            ri.iptables_manager.ipv4['filter'].add_rule(c, r)
         for c, r in self.metadata_nat_rules():
-            ri.iptables_manager.ipv4['nat'].add_rule( c, r )
+            ri.iptables_manager.ipv4['nat'].add_rule(c, r)
         ri.iptables_manager.apply()
 
-    def _router_removed( self, router_id ):
+    def _router_removed(self, router_id):
         ri = self.router_info[router_id]
         for c, r in self.metadata_filter_rules():
-            ri.iptables_manager.ipv4['filter'].remove_rule( c, r )
+            ri.iptables_manager.ipv4['filter'].remove_rule(c, r)
         for c, r in self.metadata_nat_rules():
-            ri.iptables_manager.ipv4['nat'].remove_rule( c, r )
+            ri.iptables_manager.ipv4['nat'].remove_rule(c, r)
         ri.iptables_manager.apply()
         del self.router_info[router_id]
-        self._destroy_router_namespace( ri.ns_name() )
+        self._destroy_router_namespace(ri.ns_name())
 
-    def _set_subnet_info( self, port ):
+    def _set_subnet_info(self, port):
         ips = port['fixed_ips']
         if not ips:
-            raise Exception( "Router port %s has no IP address" % port['id'] )
-        if len( ips ) > 1:
-            LOG.error( "Ignoring multiple IPs on router port %s" % port['id'] )
-        port['subnet'] = self.qclient.show_subnet( 
-            ips[0]['subnet_id'] )['subnet']
-        prefixlen = netaddr.IPNetwork( port['subnet']['cidr'] ).prefixlen
-        port['ip_cidr'] = "%s/%s" % ( ips[0]['ip_address'], prefixlen )
+            raise Exception("Router port %s has no IP address" % port['id'])
+        if len(ips) > 1:
+            LOG.error("Ignoring multiple IPs on router port %s" % port['id'])
+        port['subnet'] = self.qclient.show_subnet(
+            ips[0]['subnet_id'])['subnet']
+        prefixlen = netaddr.IPNetwork(port['subnet']['cidr']).prefixlen
+        port['ip_cidr'] = "%s/%s" % (ips[0]['ip_address'], prefixlen)
 
-    def process_router( self, ri ):
+    def process_router(self, ri):
 
-        ex_gw_port = self._get_ex_gw_port( ri )
+        ex_gw_port = self._get_ex_gw_port(ri)
 
-        internal_ports = self.qclient.list_ports( 
+        internal_ports = self.qclient.list_ports(
             device_id = ri.router_id,
-            device_owner = l3_db.DEVICE_OWNER_ROUTER_INTF )['ports']
+            device_owner = l3_db.DEVICE_OWNER_ROUTER_INTF)['ports']
 
-        existing_port_ids = set( [p['id'] for p in ri.internal_ports] )
-        current_port_ids = set( [p['id'] for p in internal_ports
-                                if p['admin_state_up']] )
+        existing_port_ids = set([p['id'] for p in ri.internal_ports])
+        current_port_ids = set([p['id'] for p in internal_ports
+                                if p['admin_state_up']])
         new_ports = [p for p in internal_ports if
                      p['id'] in current_port_ids and
                      p['id'] not in existing_port_ids]
@@ -302,255 +330,255 @@ class L3NATAgent( object ):
                      p['id'] not in current_port_ids]
 
         for p in new_ports:
-            self._set_subnet_info( p )
-            ri.internal_ports.append( p )
-            self.internal_network_added( ri, ex_gw_port,
+            self._set_subnet_info(p)
+            ri.internal_ports.append(p)
+            self.internal_network_added(ri, ex_gw_port,
                                         p['network_id'], p['id'],
-                                        p['ip_cidr'], p['mac_address'] )
+                                        p['ip_cidr'], p['mac_address'])
 
         for p in old_ports:
-            ri.internal_ports.remove( p )
-            self.internal_network_removed( ri, ex_gw_port, p['id'],
-                                          p['ip_cidr'] )
+            ri.internal_ports.remove(p)
+            self.internal_network_removed(ri, ex_gw_port, p['id'],
+                                          p['ip_cidr'])
 
         internal_cidrs = [p['ip_cidr'] for p in ri.internal_ports]
 
         if ex_gw_port and not ri.ex_gw_port:
-            self._set_subnet_info( ex_gw_port )
-            self.external_gateway_added( ri, ex_gw_port, internal_cidrs )
+            self._set_subnet_info(ex_gw_port)
+            self.external_gateway_added(ri, ex_gw_port, internal_cidrs)
         elif not ex_gw_port and ri.ex_gw_port:
-            self.external_gateway_removed( ri, ri.ex_gw_port,
-                                          internal_cidrs )
+            self.external_gateway_removed(ri, ri.ex_gw_port,
+                                          internal_cidrs)
 
         if ri.ex_gw_port or ex_gw_port:
-            self.process_router_floating_ips( ri, ex_gw_port )
+            self.process_router_floating_ips(ri, ex_gw_port)
 
         ri.ex_gw_port = ex_gw_port
 
-    def process_router_floating_ips( self, ri, ex_gw_port ):
-        floating_ips = self.qclient.list_floatingips( 
-            router_id = ri.router_id )['floatingips']
-        existing_floating_ip_ids = set( [fip['id'] for fip in ri.floating_ips] )
-        cur_floating_ip_ids = set( [fip['id'] for fip in floating_ips] )
+    def process_router_floating_ips(self, ri, ex_gw_port):
+        floating_ips = self.qclient.list_floatingips(
+            router_id = ri.router_id)['floatingips']
+        existing_floating_ip_ids = set([fip['id'] for fip in ri.floating_ips])
+        cur_floating_ip_ids = set([fip['id'] for fip in floating_ips])
 
         id_to_fip_map = {}
 
         for fip in floating_ips:
             if fip['port_id']:
                 if fip['id'] not in existing_floating_ip_ids:
-                    ri.floating_ips.append( fip )
-                    self.floating_ip_added( ri, ex_gw_port,
+                    ri.floating_ips.append(fip)
+                    self.floating_ip_added(ri, ex_gw_port,
                                            fip['floating_ip_address'],
-                                           fip['fixed_ip_address'] )
+                                           fip['fixed_ip_address'])
 
                 # store to see if floatingip was remapped
                 id_to_fip_map[fip['id']] = fip
 
-        floating_ip_ids_to_remove = ( existing_floating_ip_ids -
-                                     cur_floating_ip_ids )
+        floating_ip_ids_to_remove = (existing_floating_ip_ids -
+                                     cur_floating_ip_ids)
         for fip in ri.floating_ips:
             if fip['id'] in floating_ip_ids_to_remove:
-                ri.floating_ips.remove( fip )
-                self.floating_ip_removed( ri, ri.ex_gw_port,
+                ri.floating_ips.remove(fip)
+                self.floating_ip_removed(ri, ri.ex_gw_port,
                                          fip['floating_ip_address'],
-                                         fip['fixed_ip_address'] )
+                                         fip['fixed_ip_address'])
             else:
                 # handle remapping of a floating IP
                 new_fip = id_to_fip_map[fip['id']]
                 new_fixed_ip = new_fip['fixed_ip_address']
                 existing_fixed_ip = fip['fixed_ip_address']
-                if ( new_fixed_ip and existing_fixed_ip and
-                        new_fixed_ip != existing_fixed_ip ):
+                if (new_fixed_ip and existing_fixed_ip and
+                        new_fixed_ip != existing_fixed_ip):
                     floating_ip = fip['floating_ip_address']
-                    self.floating_ip_removed( ri, ri.ex_gw_port,
-                                             floating_ip, existing_fixed_ip )
-                    self.floating_ip_added( ri, ri.ex_gw_port,
-                                           floating_ip, new_fixed_ip )
-                    ri.floating_ips.remove( fip )
-                    ri.floating_ips.append( new_fip )
+                    self.floating_ip_removed(ri, ri.ex_gw_port,
+                                             floating_ip, existing_fixed_ip)
+                    self.floating_ip_added(ri, ri.ex_gw_port,
+                                           floating_ip, new_fixed_ip)
+                    ri.floating_ips.remove(fip)
+                    ri.floating_ips.append(new_fip)
 
-    def _get_ex_gw_port( self, ri ):
-        ports = self.qclient.list_ports( 
+    def _get_ex_gw_port(self, ri):
+        ports = self.qclient.list_ports(
             device_id = ri.router_id,
-            device_owner = l3_db.DEVICE_OWNER_ROUTER_GW )['ports']
+            device_owner = l3_db.DEVICE_OWNER_ROUTER_GW)['ports']
         if not ports:
             return None
-        elif len( ports ) == 1:
+        elif len(ports) == 1:
             return ports[0]
         else:
-            LOG.error( "Ignoring multiple gateway ports for router %s"
-                      % ri.router_id )
+            LOG.error("Ignoring multiple gateway ports for router %s"
+                      % ri.router_id)
 
-    def get_internal_device_name( self, port_id ):
-        return ( INTERNAL_DEV_PREFIX + port_id )[:self.driver.DEV_NAME_LEN]
+    def get_internal_device_name(self, port_id):
+        return (INTERNAL_DEV_PREFIX + port_id)[:self.driver.DEV_NAME_LEN]
 
-    def get_external_device_name( self, port_id ):
-        return ( EXTERNAL_DEV_PREFIX + port_id )[:self.driver.DEV_NAME_LEN]
+    def get_external_device_name(self, port_id):
+        return (EXTERNAL_DEV_PREFIX + port_id)[:self.driver.DEV_NAME_LEN]
 
-    def external_gateway_added( self, ri, ex_gw_port, internal_cidrs ):
+    def external_gateway_added(self, ri, ex_gw_port, internal_cidrs):
 
-        interface_name = self.get_external_device_name( ex_gw_port['id'] )
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
         ex_gw_ip = ex_gw_port['fixed_ips'][0]['ip_address']
-        if not ip_lib.device_exists( interface_name,
+        if not ip_lib.device_exists(interface_name,
                                     root_helper = self.conf.root_helper,
-                                    namespace = ri.ns_name() ):
-            self.driver.plug( ex_gw_port['network_id'],
+                                    namespace = ri.ns_name()):
+            self.driver.plug(ex_gw_port['network_id'],
                              ex_gw_port['id'], interface_name,
                              ex_gw_port['mac_address'],
                              bridge = self.conf.external_network_bridge,
                              namespace = ri.ns_name(),
-                             prefix = EXTERNAL_DEV_PREFIX )
-        self.driver.init_l3( interface_name, [ex_gw_port['ip_cidr']],
-                            namespace = ri.ns_name() )
+                             prefix = EXTERNAL_DEV_PREFIX)
+        self.driver.init_l3(interface_name, [ex_gw_port['ip_cidr']],
+                            namespace = ri.ns_name())
 
         gw_ip = ex_gw_port['subnet']['gateway_ip']
         if ex_gw_port['subnet']['gateway_ip']:
             cmd = ['route', 'add', 'default', 'gw', gw_ip]
             if self.conf.use_namespaces:
-                ip_wrapper = ip_lib.IPWrapper( self.conf.root_helper,
-                                              namespace = ri.ns_name() )
-                ip_wrapper.netns.execute( cmd, check_exit_code = False )
+                ip_wrapper = ip_lib.IPWrapper(self.conf.root_helper,
+                                              namespace = ri.ns_name())
+                ip_wrapper.netns.execute(cmd, check_exit_code = False)
             else:
-                utils.execute( cmd, check_exit_code = False,
-                              root_helper = self.conf.root_helper )
+                utils.execute(cmd, check_exit_code = False,
+                              root_helper = self.conf.root_helper)
 
-        for ( c, r ) in self.external_gateway_nat_rules( ex_gw_ip,
+        for (c, r) in self.external_gateway_nat_rules(ex_gw_ip,
                                                       internal_cidrs,
-                                                      interface_name ):
-            ri.iptables_manager.ipv4['nat'].add_rule( c, r )
+                                                      interface_name):
+            ri.iptables_manager.ipv4['nat'].add_rule(c, r)
         ri.iptables_manager.apply()
 
-    def external_gateway_removed( self, ri, ex_gw_port, internal_cidrs ):
+    def external_gateway_removed(self, ri, ex_gw_port, internal_cidrs):
 
-        interface_name = self.get_external_device_name( ex_gw_port['id'] )
-        if ip_lib.device_exists( interface_name,
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
+        if ip_lib.device_exists(interface_name,
                                 root_helper = self.conf.root_helper,
-                                namespace = ri.ns_name() ):
-            self.driver.unplug( interface_name,
+                                namespace = ri.ns_name()):
+            self.driver.unplug(interface_name,
                                bridge = self.conf.external_network_bridge,
                                namespace = ri.ns_name(),
-                               prefix = EXTERNAL_DEV_PREFIX )
+                               prefix = EXTERNAL_DEV_PREFIX)
 
         ex_gw_ip = ex_gw_port['fixed_ips'][0]['ip_address']
-        for c, r in self.external_gateway_nat_rules( ex_gw_ip, internal_cidrs,
-                                                    interface_name ):
-            ri.iptables_manager.ipv4['nat'].remove_rule( c, r )
+        for c, r in self.external_gateway_nat_rules(ex_gw_ip, internal_cidrs,
+                                                    interface_name):
+            ri.iptables_manager.ipv4['nat'].remove_rule(c, r)
         ri.iptables_manager.apply()
 
-    def metadata_filter_rules( self ):
+    def metadata_filter_rules(self):
         rules = []
         if self.conf.metadata_ip:
-            rules.append( ( 'INPUT', '-s 0.0.0.0/0 -d %s '
+            rules.append(('INPUT', '-s 0.0.0.0/0 -d %s '
                           '-p tcp -m tcp --dport %s '
                           '-j ACCEPT' %
-                         ( self.conf.metadata_ip, self.conf.metadata_port ) ) )
+                         (self.conf.metadata_ip, self.conf.metadata_port)))
         return rules
 
-    def metadata_nat_rules( self ):
+    def metadata_nat_rules(self):
         rules = []
         if self.conf.metadata_ip:
-            rules.append( ( 'PREROUTING', '-s 0.0.0.0/0 -d 169.254.169.254/32 '
+            rules.append(('PREROUTING', '-s 0.0.0.0/0 -d 169.254.169.254/32 '
                          '-p tcp -m tcp --dport 80 -j DNAT '
                          '--to-destination %s:%s' %
-                         ( self.conf.metadata_ip, self.conf.metadata_port ) ) )
+                         (self.conf.metadata_ip, self.conf.metadata_port)))
         return rules
 
-    def external_gateway_nat_rules( self, ex_gw_ip, internal_cidrs,
-                                   interface_name ):
-        rules = [( 'POSTROUTING', '! -i %(interface_name)s '
+    def external_gateway_nat_rules(self, ex_gw_ip, internal_cidrs,
+                                   interface_name):
+        rules = [('POSTROUTING', '! -i %(interface_name)s '
                   '! -o %(interface_name)s -m conntrack ! '
-                  '--ctstate DNAT -j ACCEPT' % locals() )]
+                  '--ctstate DNAT -j ACCEPT' % locals())]
         for cidr in internal_cidrs:
-            rules.extend( self.internal_network_nat_rules( ex_gw_ip, cidr ) )
+            rules.extend(self.internal_network_nat_rules(ex_gw_ip, cidr))
         return rules
 
-    def internal_network_added( self, ri, ex_gw_port, network_id, port_id,
-                               internal_cidr, mac_address ):
-        interface_name = self.get_internal_device_name( port_id )
-        if not ip_lib.device_exists( interface_name,
+    def internal_network_added(self, ri, ex_gw_port, network_id, port_id,
+                               internal_cidr, mac_address):
+        interface_name = self.get_internal_device_name(port_id)
+        if not ip_lib.device_exists(interface_name,
                                     root_helper = self.conf.root_helper,
-                                    namespace = ri.ns_name() ):
-            self.driver.plug( network_id, port_id, interface_name, mac_address,
+                                    namespace = ri.ns_name()):
+            self.driver.plug(network_id, port_id, interface_name, mac_address,
                              namespace = ri.ns_name(),
-                             prefix = INTERNAL_DEV_PREFIX, internal_cidr = internal_cidr, port_type = "ROUTER" )
+                             prefix = INTERNAL_DEV_PREFIX, internal_cidr = internal_cidr, port_type = "ROUTER")
 
-        self.driver.init_l3( interface_name, [internal_cidr],
-                            namespace = ri.ns_name() )
+        self.driver.init_l3(interface_name, [internal_cidr],
+                            namespace = ri.ns_name())
 
         if ex_gw_port:
             ex_gw_ip = ex_gw_port['fixed_ips'][0]['ip_address']
-            for c, r in self.internal_network_nat_rules( ex_gw_ip,
-                                                        internal_cidr ):
-                ri.iptables_manager.ipv4['nat'].add_rule( c, r )
+            for c, r in self.internal_network_nat_rules(ex_gw_ip,
+                                                        internal_cidr):
+                ri.iptables_manager.ipv4['nat'].add_rule(c, r)
             ri.iptables_manager.apply()
 
-    def internal_network_removed( self, ri, ex_gw_port, port_id, internal_cidr ):
-        interface_name = self.get_internal_device_name( port_id )
-        if ip_lib.device_exists( interface_name,
+    def internal_network_removed(self, ri, ex_gw_port, port_id, internal_cidr):
+        interface_name = self.get_internal_device_name(port_id)
+        if ip_lib.device_exists(interface_name,
                                 root_helper = self.conf.root_helper,
-                                namespace = ri.ns_name() ):
-            self.driver.unplug( interface_name, namespace = ri.ns_name(),
-                               prefix = INTERNAL_DEV_PREFIX )
+                                namespace = ri.ns_name()):
+            self.driver.unplug(interface_name, namespace = ri.ns_name(),
+                               prefix = INTERNAL_DEV_PREFIX)
 
         if ex_gw_port:
             ex_gw_ip = ex_gw_port['fixed_ips'][0]['ip_address']
-            for c, r in self.internal_network_nat_rules( ex_gw_ip,
-                                                        internal_cidr ):
-                ri.iptables_manager.ipv4['nat'].remove_rule( c, r )
+            for c, r in self.internal_network_nat_rules(ex_gw_ip,
+                                                        internal_cidr):
+                ri.iptables_manager.ipv4['nat'].remove_rule(c, r)
             ri.iptables_manager.apply()
 
-    def internal_network_nat_rules( self, ex_gw_ip, internal_cidr ):
-        rules = [( 'snat', '-s %s -j SNAT --to-source %s' %
-                 ( internal_cidr, ex_gw_ip ) )]
+    def internal_network_nat_rules(self, ex_gw_ip, internal_cidr):
+        rules = [('snat', '-s %s -j SNAT --to-source %s' %
+                 (internal_cidr, ex_gw_ip))]
         if self.conf.metadata_ip:
-            rules.append( ( 'POSTROUTING', '-s %s -d %s/32 -j ACCEPT' %
-                          ( internal_cidr, self.conf.metadata_ip ) ) )
+            rules.append(('POSTROUTING', '-s %s -d %s/32 -j ACCEPT' %
+                          (internal_cidr, self.conf.metadata_ip)))
         return rules
 
-    def floating_ip_added( self, ri, ex_gw_port, floating_ip, fixed_ip ):
-        ip_cidr = str( floating_ip ) + '/32'
-        interface_name = self.get_external_device_name( ex_gw_port['id'] )
-        device = ip_lib.IPDevice( interface_name, self.conf.root_helper,
-                                 namespace = ri.ns_name() )
+    def floating_ip_added(self, ri, ex_gw_port, floating_ip, fixed_ip):
+        ip_cidr = str(floating_ip) + '/32'
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
+        device = ip_lib.IPDevice(interface_name, self.conf.root_helper,
+                                 namespace = ri.ns_name())
 
         if not ip_cidr in [addr['cidr'] for addr in device.addr.list()]:
-            net = netaddr.IPNetwork( ip_cidr )
-            device.addr.add( net.version, ip_cidr, str( net.broadcast ) )
+            net = netaddr.IPNetwork(ip_cidr)
+            device.addr.add(net.version, ip_cidr, str(net.broadcast))
 
-        for chain, rule in self.floating_forward_rules( floating_ip, fixed_ip ):
-            ri.iptables_manager.ipv4['nat'].add_rule( chain, rule )
+        for chain, rule in self.floating_forward_rules(floating_ip, fixed_ip):
+            ri.iptables_manager.ipv4['nat'].add_rule(chain, rule)
         ri.iptables_manager.apply()
 
-    def floating_ip_removed( self, ri, ex_gw_port, floating_ip, fixed_ip ):
-        ip_cidr = str( floating_ip ) + '/32'
-        net = netaddr.IPNetwork( ip_cidr )
-        interface_name = self.get_external_device_name( ex_gw_port['id'] )
+    def floating_ip_removed(self, ri, ex_gw_port, floating_ip, fixed_ip):
+        ip_cidr = str(floating_ip) + '/32'
+        net = netaddr.IPNetwork(ip_cidr)
+        interface_name = self.get_external_device_name(ex_gw_port['id'])
 
-        device = ip_lib.IPDevice( interface_name, self.conf.root_helper,
-                                 namespace = ri.ns_name() )
-        device.addr.delete( net.version, ip_cidr )
+        device = ip_lib.IPDevice(interface_name, self.conf.root_helper,
+                                 namespace = ri.ns_name())
+        device.addr.delete(net.version, ip_cidr)
 
-        for chain, rule in self.floating_forward_rules( floating_ip, fixed_ip ):
-            ri.iptables_manager.ipv4['nat'].remove_rule( chain, rule )
+        for chain, rule in self.floating_forward_rules(floating_ip, fixed_ip):
+            ri.iptables_manager.ipv4['nat'].remove_rule(chain, rule)
         ri.iptables_manager.apply()
 
-    def floating_forward_rules( self, floating_ip, fixed_ip ):
-        return [( 'PREROUTING', '-d %s -j DNAT --to %s' %
-                 ( floating_ip, fixed_ip ) ),
-                ( 'OUTPUT', '-d %s -j DNAT --to %s' %
-                 ( floating_ip, fixed_ip ) ),
-                ( 'float-snat', '-s %s -j SNAT --to %s' %
-                 ( fixed_ip, floating_ip ) )]
+    def floating_forward_rules(self, floating_ip, fixed_ip):
+        return [('PREROUTING', '-d %s -j DNAT --to %s' %
+                 (floating_ip, fixed_ip)),
+                ('OUTPUT', '-d %s -j DNAT --to %s' %
+                 (floating_ip, fixed_ip)),
+                ('float-snat', '-s %s -j SNAT --to %s' %
+                 (fixed_ip, floating_ip))]
 
 
 def main():
     conf = config.setup_conf()
-    conf.register_opts( L3NATAgent.OPTS )
-    conf.register_opts( interface.OPTS )
-    conf( sys.argv )
-    config.setup_logging( conf )
+    conf.register_opts(L3NATAgent.OPTS)
+    conf.register_opts(interface.OPTS)
+    conf(sys.argv)
+    config.setup_logging(conf)
 
-    mgr = L3NATAgent( conf )
+    mgr = L3NATAgent(conf)
     mgr.daemon_loop()
 
 

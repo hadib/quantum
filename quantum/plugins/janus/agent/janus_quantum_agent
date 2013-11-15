@@ -38,9 +38,11 @@ from quantum.plugins.janus.common import config
 
 
 class OVSBridge(ovs_lib.OVSBridge):
-    def __init__(self, br_name, root_helper):
+    def __init__(self, br_name, root_helper, ctrl_rate, ctrl_burst):
         ovs_lib.OVSBridge.__init__(self, br_name, root_helper)
         self.datapath_id = None
+        self.ctrl_rate = ctrl_rate
+        self.ctrl_burst = ctrl_burst
 
     def find_datapath_id(self):
         # ovs-vsctl get Bridge br-int datapath_id
@@ -56,6 +58,9 @@ class OVSBridge(ovs_lib.OVSBridge):
         if not args[0] in methods:
             target = "tcp:" + target
         self.run_vsctl(["set-controller", self.br_name, target])
+        self.run_vsctl(["set", "controller", self.br_name, 'connection_mode=out-of-band'])
+        self.run_vsctl(["set", "controller", self.br_name, 'controller_rate_limit=%s' % self.ctrl_rate])
+        self.run_vsctl(["set", "controller", self.br_name, 'controller_burst_limit=%s' % self.ctrl_burst])
 
     def _vifport(self, name, external_ids):
         ofport = self.db_get_val("Interface", name, "ofport")
@@ -129,17 +134,17 @@ def check_ofp_mode(db):
 
 
 class OVSQuantumOFPJanusAgent(object):
-    def __init__(self, integ_br, db, root_helper):
+    def __init__(self, integ_br, db, root_helper, ctrl_rate, ctrl_burst):
         self.root_helper = root_helper
         (ofp_controller_addr, ofp_rest_api_addr) = check_ofp_mode(db)
 
         self.nw_id_external = NW_ID_EXTERNAL
         host, port = ofp_rest_api_addr.split(':')
         self.api = JanusNetworkDriver(host, port)
-        self._setup_integration_br(integ_br, ofp_controller_addr)
+        self._setup_integration_br(integ_br, ofp_controller_addr, ctrl_rate, ctrl_burst)
 
-    def _setup_integration_br(self, integ_br, ofp_controller_addr):
-        self.int_br = OVSBridge(integ_br, self.root_helper)
+    def _setup_integration_br(self, integ_br, ofp_controller_addr, ctrl_rate, ctrl_burst):
+        self.int_br = OVSBridge(integ_br, self.root_helper, ctrl_rate, ctrl_burst)
         self.int_br.find_datapath_id()
         self.int_br.set_controller(ofp_controller_addr)
         for port in self.int_br.get_external_ports():
@@ -223,19 +228,21 @@ class OVSQuantumOFPJanusAgent(object):
 
 
 def main():
-    cfg.CONF(args=sys.argv, project='quantum')
+    cfg.CONF(args = sys.argv, project = 'quantum')
 
     # (TODO) gary - swap with common logging
     logging_config.setup_logging(cfg.CONF)
 
     integ_br = cfg.CONF.OVS.integration_bridge
     root_helper = cfg.CONF.AGENT.root_helper
+    ctrl_rate = cfg.CONF.OVS.ctrl_rate
+    ctrl_burst = cfg.CONF.OVS.ctrl_burst
     options = {"sql_connection": cfg.CONF.DATABASE.sql_connection}
     db = SqlSoup(options["sql_connection"])
 
     LOG.info("Connecting to database \"%s\" on %s",
              db.engine.url.database, db.engine.url.host)
-    plugin = OVSQuantumOFPJanusAgent(integ_br, db, root_helper)
+    plugin = OVSQuantumOFPJanusAgent(integ_br, db, root_helper, ctrl_rate, ctrl_burst)
     plugin.daemon_loop(db)
 
     sys.exit(0)
