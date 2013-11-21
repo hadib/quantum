@@ -548,7 +548,7 @@ class DhcpLeaseRelay(object):
 
 
 def main():
-#    eventlet.monkey_patch()
+    eventlet.monkey_patch()
     cfg.CONF.register_opts(DhcpAgent.OPTS)
     cfg.CONF.register_opts(DeviceManager.OPTS)
     cfg.CONF.register_opts(DhcpLeaseRelay.OPTS)
