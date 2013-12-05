@@ -491,11 +491,15 @@ class DhcpLeaseRelay(object):
     OPTS = [
         cfg.StrOpt('dhcp_lease_relay_socket',
                    default = '$state_path/dhcp/lease_relay',
-                   help = 'Location to DHCP lease relay UNIX domain socket')
+                   help = 'Location to DHCP lease relay UNIX domain socket'),
+        cfg.StrOpt('interface_driver',
+                   help = "The driver used to manage the virtual interface.")
     ]
 
     def __init__(self, lease_update_callback):
+
         self.callback = lease_update_callback
+        self.driver = importutils.import_object(cfg.CONF.interface_driver, cfg.CONF)
 
         dirname = os.path.dirname(cfg.CONF.dhcp_lease_relay_socket)
         if os.path.isdir(dirname):
@@ -532,6 +536,10 @@ class DhcpLeaseRelay(object):
                                               attributes.UUID_PATTERN)
             ip_address = str(netaddr.IPAddress(data['ip_address']))
             lease_remaining = int(data['lease_remaining'])
+            try:
+                self.driver.lease_remaining(network_id, ip_address, data['mac_address'], lease_remaining)
+            except:
+                pass
             self.callback(network_id, ip_address, lease_remaining)
         except ValueError, e:
             LOG.warn(_('Unable to parse lease relay msg to dict.'))

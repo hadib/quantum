@@ -106,4 +106,10 @@ class JanusInterfaceDriver(OVSInterfaceDriver):
         except:
             traceback.print_exc()
 
+    def lease_remaining(self, network_id, ip_address, mac_address, lease_remaining):
+        try:
+            self.client.lease_remaining(network_id, ip_address, mac_address, lease_remaining)
+        except:
+            traceback.print_exc()
+
 
