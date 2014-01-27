@@ -47,7 +47,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
     supported_extension_aliases = ["router"]
 
-    def __init__(self, configfile=None):
+    def __init__(self, configfile = None):
         options = {"sql_connection": cfg.CONF.DATABASE.sql_connection}
         options.update({'base': models_v2.model_base.BASEV2})
         reconnect_interval = cfg.CONF.DATABASE.reconnect_interval
@@ -75,10 +75,10 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
         self._create_all_tenant_network()
 
     def _setup_rpc(self):
-        self.conn = rpc.create_connection(new=True)
+        self.conn = rpc.create_connection(new = True)
         self.callback = DhcpRpcCallbackMixin()
         self.dispatcher = dispatcher.RpcDispatcher([self.callback])
-        self.conn.create_consumer(topics.PLUGIN, self.dispatcher, fanout=False)
+        self.conn.create_consumer(topics.PLUGIN, self.dispatcher, fanout = False)
         self.conn.consume_in_thread()
 
     def _create_all_tenant_network(self):
@@ -88,7 +88,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
     def create_network(self, context, network):
         session = context.session
-        with session.begin(subtransactions=True):
+        with session.begin(subtransactions = True):
             net = super(JanusQuantumPluginV2, self).create_network(context,
                                                                  network)
             self.client.createNetwork(net['id'])
@@ -98,7 +98,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
     def update_network(self, context, id, network):
         session = context.session
-        with session.begin(subtransactions=True):
+        with session.begin(subtransactions = True):
             net = super(JanusQuantumPluginV2, self).update_network(context, id,
                                                                  network)
             self._process_l3_update(context, network['network'], id)
@@ -107,7 +107,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
     def delete_network(self, context, id):
         session = context.session
-        with session.begin(subtransactions=True):
+        with session.begin(subtransactions = True):
             # Check for any DHCP ports and unregister them first.
             # Essentially doing the Janus-related 'unplug' tasks for q-dhcp.
             #   Cannot rely on q-dhcp interface driver to do 'unplug' due to
@@ -119,7 +119,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
                 datapath_id = ovs_br.get_datapath_id()
 
                 filter = {'network_id': [id]}
-                ports = self.get_ports(context, filters=filter)
+                ports = self.get_ports(context, filters = filter)
 
             super(JanusQuantumPluginV2, self).delete_network(context, id)
 
@@ -132,12 +132,12 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
             self.client.deleteNetwork(id)
 
-    def get_network(self, context, id, fields=None):
+    def get_network(self, context, id, fields = None):
         net = super(JanusQuantumPluginV2, self).get_network(context, id, None)
         self._extend_network_dict_l3(context, net)
         return self._fields(net, fields)
 
-    def get_networks(self, context, filters=None, fields=None):
+    def get_networks(self, context, filters = None, fields = None):
         nets = super(JanusQuantumPluginV2, self).get_networks(context, filters,
                                                             None)
         for net in nets:
@@ -146,7 +146,7 @@ class JanusQuantumPluginV2(db_base_plugin_v2.QuantumDbPluginV2,
 
         return [self._fields(net, fields) for net in nets]
 
-    def delete_port(self, context, id, l3_port_check=True):
+    def delete_port(self, context, id, l3_port_check = True):
         # if needed, check to see if this is a port owned by
         # and l3-router. If so, we should prevent deletion.
         if l3_port_check:

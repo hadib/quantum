@@ -81,8 +81,8 @@ class JanusInterfaceDriver(OVSInterfaceDriver):
         ovs_br = ovs_lib.OVSBridge(bridge, self.conf.root_helper)
         datapath_id = ovs_br.get_datapath_id()
         port_no = ovs_br.get_port_ofport(device_name)
-        self.client.addMAC(network_id, mac_address)
         self.client.createPort(network_id, datapath_id, port_no, port_type)
+        self.client.addMAC(network_id, mac_address)
         if internal_cidr is not None:
             ip = internal_cidr.split("/")[0]
             self.client.ip_mac_mapping(network_id, datapath_id, mac_address, ip, port_no, port_type)

@@ -51,7 +51,7 @@ def _get_port_no(dev):
 
 def _set_port_no_in_external_id(dev, of_port):
     out, _err = utils.execute('ovs-vsctl', 'set', 'Interface', dev,
-                              'external-ids:ofport=%s' % of_port,run_as_root=True)
+                              'external-ids:ofport=%s' % of_port, run_as_root = True)
     return
 
 
@@ -74,18 +74,20 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
         network, mapping = vif
         (v2_name, port_no) = self._get_port_no(mapping)
         try:
-            print "dev, %s, %s port %s" %(mapping, v2_name, port_no)
-            _set_port_no_in_external_id(v2_name,port_no)
+            print "dev, %s, %s port %s" % (mapping, v2_name, port_no)
+            _set_port_no_in_external_id(v2_name, port_no)
         except:
             traceback.print_exc()
             pass
         try:
-            self.client.createPort(network['id'], self.datapath_id, port_no)
-            self.client.addMAC(network['id'], mapping['mac'])
-            for ip in mapping['ips']:
-                self.client.ip_mac_mapping(network['id'], self.datapath_id,
-                                           mapping['mac'], ip['ip'],
-                                           port_no)
+            if mapping.get('no_call', False) is False:
+                self.client.createPort(network['id'], self.datapath_id, port_no, migrating = mapping.get('migrating', False))
+                self.client.addMAC(network['id'], mapping['mac'])
+                for ip in mapping['ips']:
+                    self.client.ip_mac_mapping(network['id'], self.datapath_id,
+                                               mapping['mac'], ip['ip'],
+                                               port_no,
+                                               migrating = mapping.get('migrating', False))
         except httplib.HTTPException as e:
             res = e.args[0]
             if res.status != httplib.CONFLICT:
@@ -95,19 +97,20 @@ class LibvirtOpenVswitchOFPJanusDriver(libvirt_vif.LibvirtHybridOVSBridgeDriver)
     def unplug(self, instance, vif):
         network, mapping = vif
         (v2_name, port_no) = self._get_port_no(mapping)
-        try:
-            self.client.deletePort(network['id'], self.datapath_id, port_no)
-            # To do: Un-mapping of ip to mac?
-        except httplib.HTTPException as e:
-            res = e.args[0]
-            if res.status != httplib.NOT_FOUND:
-                traceback.print_exc()
-                raise
-        try:
-            self.client.delMAC(network['id'], mapping['mac'])
-        except httplib.HTTPException as e:
-            res = e.args[0]
-            if res.status != httplib.NOT_FOUND:
-                traceback.print_exc()
-                raise
+        if mapping.get('migrated', False) is False:
+            try:
+                self.client.deletePort(network['id'], self.datapath_id, port_no)
+                # To do: Un-mapping of ip to mac?
+            except httplib.HTTPException as e:
+                res = e.args[0]
+                if res.status != httplib.NOT_FOUND:
+                    traceback.print_exc()
+                    raise
+            try:
+                self.client.delMAC(network['id'], mapping['mac'])
+            except httplib.HTTPException as e:
+                res = e.args[0]
+                if res.status != httplib.NOT_FOUND:
+                    traceback.print_exc()
+                    raise
         super(LibvirtOpenVswitchOFPJanusDriver, self).unplug(instance, vif)
